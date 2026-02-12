@@ -41,65 +41,73 @@ def batch_mst_weight(dist_matrix):
 
 def get_rtd_lite_loss(coords, embeddings):
     """
-    Реализация RTD-Lite (Алгоритм 2 из статьи).
-    Сравнивает топологию входного пространства и латентного пространства.
+    Обновленная версия: Точная реализация Algorithm 2 из статьи.
     """
-    # Матрицы попарных расстояний
-    # Нормализуем для стабильности (важно, т.к. масштабы координат и эмбеддингов разные)
+    # 1. Матрицы расстояний
     d_x = torch.cdist(coords, coords, p=2)
-    d_x = d_x / (d_x.max(dim=-1, keepdim=True)[0].max(dim=-2, keepdim=True)[0] + 1e-6)
-    
     d_z = torch.cdist(embeddings, embeddings, p=2)
-    d_z = d_z / (d_z.max(dim=-1, keepdim=True)[0].max(dim=-2, keepdim=True)[0] + 1e-6)
     
-    # 1. MST исходного графа
-    mst_x = batch_mst_weight(d_x)
-    # 2. MST пространства эмбеддингов
-    mst_z = batch_mst_weight(d_z)
-    # 3. MST "совместного" графа (покомпонентный минимум)
-    d_joint = torch.min(d_x, d_z)
+    # 2. НОРМАЛИЗАЦИЯ ПО КВАНТИЛЮ (как в эталоне)
+    # Это делает лосс стабильным независимо от масштаба координат
+    # Вычисляем квантиль по всему батчу для скорости
+    q_x = torch.quantile(d_x, 0.9) + 1e-6
+    q_z = torch.quantile(d_z, 0.9) + 1e-6
+    
+    d_x_norm = d_x / q_x
+    d_z_norm = d_z / q_z
+    
+    # 3. Совместная матрица
+    d_joint = torch.minimum(d_x_norm, d_z_norm)
+    
+    # 4. MST веса (используем твой быстрый батчевый Prim)
+    mst_x = batch_mst_weight(d_x_norm)
+    mst_z = batch_mst_weight(d_z_norm)
     mst_joint = batch_mst_weight(d_joint)
     
-    # Формула RTDL
-    rtd_loss = mst_x + mst_z - 2 * mst_joint
+    # 5. ФОРМУЛА С КОЭФФИЦИЕНТОМ 0.5
+    # RTD(X, Z) = 0.5 * (Sum(MST_x) + Sum(MST_z) - 2 * Sum(MST_joint))
+    rtd_loss = 0.5 * (mst_x + mst_z - 2 * mst_joint)
+    
     return rtd_loss.mean()
 
 def compute_tour_topological_gaps(tour, coords):
     """
-    Вычисляет Edge-wise Topological Divergence Gaps для TSP тура.
-    tour: [batch, N] - индексы городов в порядке посещения
-    coords: [batch, N, 2] - координаты
+    Вычисляет нормализованные Edge-wise Topological Divergence Gaps.
+    Масштабирует расстояния, чтобы штраф был стабильным.
     """
     B, N, _ = coords.shape
     device = coords.device
     
-    # 1. Считаем матрицу расстояний и MST
+    # 1. Матрица расстояний
     dist_matrix = torch.cdist(coords, coords)
     
-    # 2. Находим Bottleneck Distances (Ультраметрику)
-    # Для этого используем алгоритм Kruskal-like merge для построения
-    # матрицы максимальных ребер на путях в MST.
-    bottleneck_matrix = compute_bottleneck_matrix(dist_matrix)
+    # 2. НОРМАЛИЗАЦИЯ (Scale Invariance)
+    # Делим на 0.9-квантиль, чтобы привести расстояния к единому масштабу
+    q = torch.quantile(dist_matrix, 0.9) + 1e-6
+    dist_matrix_norm = dist_matrix / q
     
-    # 3. Извлекаем веса ребер самого тура
-    # Добавляем первый узел в конец, чтобы замкнуть цикл
+    # 3. Вычисляем Bottleneck Matrix (на основе нормализованных данных)
+    # Она показывает максимально допустимое "здоровое" расстояние между узлами по MST
+    bottleneck_matrix = compute_bottleneck_matrix(dist_matrix_norm)
+    
+    # 4. Подготовка индексов тура (замыкаем цикл)
     tour_extended = torch.cat([tour, tour[:, :1]], dim=1)
+    u = tour_extended[:, :-1] # Откуда
+    v = tour_extended[:, 1:]  # Куда
     
-    # Собираем веса ребер тура
-    u = tour_extended[:, :-1]
-    v = tour_extended[:, 1:]
+    # 5. Извлекаем нормализованные веса ребер тура
+    # Собираем значения из dist_matrix_norm по индексам (u, v)
+    edge_weights = dist_matrix_norm.gather(2, v.unsqueeze(-1)).gather(1, u.unsqueeze(-1)).squeeze(-1)
     
-    # edge_weights: [B, N]
-    edge_weights = dist_matrix.gather(2, v.unsqueeze(-1)).gather(1, u.unsqueeze(-1)).squeeze()
+    # 6. Извлекаем bottleneck веса для тех же пар
+    b_weights = bottleneck_matrix.gather(2, v.unsqueeze(-1)).gather(1, u.unsqueeze(-1)).squeeze(-1)
     
-    # Собираем bottleneck веса для тех же пар узлов
-    # b_weights: [B, N]
-    b_weights = bottleneck_matrix.gather(2, v.unsqueeze(-1)).gather(1, u.unsqueeze(-1)).squeeze()
-    
-    # Gap = вес_ребра - вес_бутылочного_горлышка_в_MST
+    # 7. Расчет Gap (Разрыва)
+    # Если ребро тура длиннее, чем путь в MST, это топологический разрыв
     gaps = torch.clamp(edge_weights - b_weights, min=0.0)
     
-    return gaps.sum(dim=1) # Сумма разрывов для каждого графа в батче
+    # Возвращаем сумму разрывов для каждого графа в батче
+    return gaps.sum(dim=1)
 
 def compute_bottleneck_matrix(dist_matrix):
     """
