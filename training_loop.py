@@ -43,7 +43,7 @@ def train_model_with_knn(args,model_train,model_baseline,optimizer_model,schedul
                 x_aug,x_repeat = generate_tsp_instance(args,device)
                 # compute tours for baseline
                 with torch.no_grad():
-                    tour_baseline, _= model_baseline(x_aug, action_k, state_k, choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
+                    tour_baseline, _ ,_= model_baseline(x_aug, action_k, state_k, choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
                 L_baseline = compute_tsp_tour_length(x_repeat, tour_baseline)
                 # compute tours for model
                 # tour_train_model,sumLogProbOfActions_model = model_train(x_aug, action_k, state_k, choice_deterministic=False, if_use_local_mask =args.if_use_local_mask)
@@ -67,7 +67,7 @@ def train_model_with_knn(args,model_train,model_baseline,optimizer_model,schedul
             elif args.problem == 'cvrp' or args.problem == 'sdvrp':
                 input_aug,x_repeat = generate_vrp_instance(args,device)
                 with torch.no_grad():
-                    tour_baseline, _ = model_baseline(input_aug,action_k,state_k,capacity,problem=args.problem,choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
+                    tour_baseline, _, _ = model_baseline(input_aug,action_k,state_k,capacity,problem=args.problem,choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
                 L_baseline = compute_vrp_tour_length(x_repeat, tour_baseline)
                 # compute tours for model
                 tour_train_model, sumLogProbOfActions_model, embeddings = model_train(input_aug, action_k, 
@@ -93,7 +93,8 @@ def train_model_with_knn(args,model_train,model_baseline,optimizer_model,schedul
             ####################################################
             # 1. RL Loss (REINFORCE)
             # Используем L_train_total (с учетом штрафа) для градиента политики
-            loss_rl = torch.mean((L_train_total - L_baseline) * sumLogProbOfActions_model)
+            advantage = (L_train_total - L_baseline).detach() 
+            loss_rl = torch.mean(advantage * sumLogProbOfActions_model)
             
             # 2. RTD-Lite Loss (Regularization)
             ### NEW: TOPO ENCODER LOSS ###
@@ -114,6 +115,7 @@ def train_model_with_knn(args,model_train,model_baseline,optimizer_model,schedul
             
             optimizer_model.zero_grad()
             loss_model.backward()
+            torch.nn.utils.clip_grad_norm_(model_train.parameters(), 1.0)
             optimizer_model.step()
             
         
@@ -136,16 +138,16 @@ def train_model_with_knn(args,model_train,model_baseline,optimizer_model,schedul
                 x_aug,x_repeat = generate_tsp_instance(args,device,if_test=True)
                 # compute tours for baseline
                 with torch.no_grad():
-                    tour_comb0,_= model_baseline(x_aug, action_k, state_k, choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
-                    tour_comb1,_ = model_train(x_aug, action_k, state_k, choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
+                    tour_comb0,_, _= model_baseline(x_aug, action_k, state_k, choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
+                    tour_comb1,_, _ = model_train(x_aug, action_k, state_k, choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
                     L_comb0 = compute_tsp_tour_length(x_repeat, tour_comb0)
                     L_comb1 = compute_tsp_tour_length(x_repeat, tour_comb1)
 
             elif args.problem == 'cvrp' or args.problem == 'sdvrp':
                 input_aug,x_repeat = generate_vrp_instance(args,device,if_test=True)
                 with torch.no_grad():
-                    tour_comb0,_ = model_baseline(input_aug,action_k,state_k,capacity,problem=args.problem,choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
-                    tour_comb1,_ = model_train(input_aug,action_k,state_k,capacity,problem=args.problem,choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
+                    tour_comb0,_, _ = model_baseline(input_aug,action_k,state_k,capacity,problem=args.problem,choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
+                    tour_comb1,_, _ = model_train(input_aug,action_k,state_k,capacity,problem=args.problem,choice_deterministic=True, if_use_local_mask =args.if_use_local_mask)
                     L_comb0 = compute_vrp_tour_length(x_repeat, tour_comb0)
                     L_comb1 = compute_vrp_tour_length(x_repeat, tour_comb1)
 
