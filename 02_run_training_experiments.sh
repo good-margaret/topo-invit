@@ -4,6 +4,7 @@ PROBLEM="tsp"
 NODES=50       # Тренируемся всегда на 50, тестируем на 100+
 EPOCHS=100     # Для статьи обычно 400+, для теста хватит 100
 GPU_ID=0
+BATCH_SIZE=150
 
 # Сетка гиперпараметров (Grid Search)
 # Format: "BETA LAMBDA_GAP"
@@ -32,6 +33,7 @@ do
         --problem "${PROBLEM}" \
         --nb_nodes "${NODES}" \
         --nb_epochs "${EPOCHS}" \
+        --nb_batch_per_epoch "${BATCH_SIZE}" \
         --beta "${BETA}" \
         --lambda_gap "${LAMBDA}" \
         --gpu_id "${GPU_ID}" \

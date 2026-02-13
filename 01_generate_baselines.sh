@@ -37,14 +37,14 @@ do
             
         echo "--------------------------------------------------"
 
-        echo "[>] Решение Gurobi для: ${DATA_FILE}"
-        python baselines/solve_by_Gurobi.py \
-            --problem-type "${PROBLEM}" \
-            --path "${DATA_FILE}" \
-            --runs "${RUNS}" \
-            --overwrite # Перезаписать, если уже есть старое
+        # echo "[>] Решение Gurobi для: ${DATA_FILE}"
+        # python baselines/solve_by_Gurobi.py \
+        #     --problem-type "${PROBLEM}" \
+        #     --path "${DATA_FILE}" \
+        #     --runs "${RUNS}" \
+        #     --overwrite # Перезаписать, если уже есть старое
             
-        echo "--------------------------------------------------"
+        # echo "--------------------------------------------------"
     done
 done
 
